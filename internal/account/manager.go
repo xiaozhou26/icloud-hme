@@ -143,14 +143,20 @@ func ParseCookieInput(raw string) (map[string]string, error) {
 	return cookies, nil
 }
 
-// AddAccount 添加一个账号并立即校验会话,解析真实邮箱和别名数。
+// AddAccount 添加一个账号。cookieInput 可为空,后续可通过 /login 获取。
 //
 // cookieInput 支持 Header String 或 JSON。校验失败仍会保存账号(status=error),
 // 方便用户后续修正 Cookie 后重新校验。
 func (m *Manager) AddAccount(name, cookieInput, host, proxy string) (*Account, error) {
-	cookies, err := ParseCookieInput(cookieInput)
-	if err != nil {
-		return nil, err
+	var cookies map[string]string
+	if cookieInput != "" {
+		var err error
+		cookies, err = ParseCookieInput(cookieInput)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		cookies = make(map[string]string)
 	}
 	if host == "" {
 		host = "icloud.com"
@@ -162,40 +168,43 @@ func (m *Manager) AddAccount(name, cookieInput, host, proxy string) (*Account, e
 		Cookies:   cookies,
 		Host:      host,
 		Proxy:     proxy,
-		Status:    "active",
+		Status:    "pending", // 无 Cookie 时为 pending
 		CreatedAt: time.Now().Format(time.RFC3339),
 	}
 
-	// 校验会话 + 抓取真实邮箱和别名数。
-	client, err := hme.NewClient(cookies, host, proxy, false)
-	if err != nil {
-		return nil, err
-	}
-	if err := client.ValidateSession(); err != nil {
-		acc.Status = "error"
-		acc.LastError = truncate(err.Error(), 300)
-	} else {
-		if info := client.AccountInfo(); info != nil {
-			acc.RealEmail = firstNonEmpty(info.AppleID, info.PrimaryEmail)
-			acc.ICloudEmail = deriveICloudEmail(info)
+	// 有 Cookie 才校验会话
+	if len(cookies) > 0 {
+		client, err := hme.NewClient(cookies, host, proxy, false)
+		if err != nil {
+			return nil, err
 		}
-		if aliases, err := client.ListAliases(); err == nil {
-			acc.AliasTotal = len(aliases)
-			for _, a := range aliases {
-				if a.Active {
-					acc.AliasActive++
+		if err := client.ValidateSession(); err != nil {
+			acc.Status = "error"
+			acc.LastError = truncate(err.Error(), 300)
+		} else {
+			acc.Status = "active"
+			if info := client.AccountInfo(); info != nil {
+				acc.RealEmail = firstNonEmpty(info.AppleID, info.PrimaryEmail)
+				acc.ICloudEmail = deriveICloudEmail(info)
+			}
+			if aliases, err := client.ListAliases(); err == nil {
+				acc.AliasTotal = len(aliases)
+				for _, a := range aliases {
+					if a.Active {
+						acc.AliasActive++
+					}
 				}
 			}
+			acc.LastValidated = time.Now().Format(time.RFC3339)
 		}
-		acc.LastValidated = time.Now().Format(time.RFC3339)
 	}
 
 	m.mu.Lock()
 	m.accounts[acc.ID] = acc
-	err = m.save()
+	saveErr := m.save()
 	m.mu.Unlock()
-	if err != nil {
-		return nil, err
+	if saveErr != nil {
+		return nil, saveErr
 	}
 	return acc, nil
 }

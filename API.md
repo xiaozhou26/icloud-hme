@@ -125,6 +125,19 @@ GET /api/accounts
 
 ### 4. 添加账号
 
+**简化版（cookies 可选）:**
+```http
+POST /api/accounts
+Content-Type: application/json
+
+{
+  "name": "新账号",
+  "host": "icloud.com",
+  "proxy": "http://user:pass@host:port"
+}
+```
+
+**完整版（包含 Cookie）:**
 ```http
 POST /api/accounts
 Content-Type: application/json
@@ -132,7 +145,7 @@ Content-Type: application/json
 {
   "name": "新账号",
   "cookies": "{\"x-apple-session-token\":\"token_value\"}",
-  "host": "imap.mail.me.com",
+  "host": "icloud.com",
   "proxy": "http://user:pass@host:port"
 }
 ```
@@ -144,19 +157,65 @@ Content-Type: application/json
   "data": {
     "id": "acc_3",
     "name": "新账号",
-    "host": "imap.mail.me.com"
+    "host": "icloud.com",
+    "status": "pending"
   }
 }
 ```
 
 **参数说明:**
 - `name` (必填) — 账号名称
-- `cookies` (必填) — Cookie 字符串，支持两种格式：
+- `cookies` (可选) — Cookie 字符串,支持两种格式:
   - JSON: `"{\"name\":\"value\"}"`
   - Header: `"name1=value1; name2=value2"`
-- `host` (可选) — iCloud 域名，默认 `icloud.com`
+- `host` (可选) — iCloud 域名,默认 `icloud.com`
 - `proxy` (可选) — HTTP/SOCKS5 代理
-- `host` (可选) — IMAP 服务器地址，默认 `imap.mail.me.com`
+
+**注意:** 不传 cookies 时,账号状态为 `pending`,需通过 `/login` 接口登录获取 Cookie
+
+---
+
+### 5. 账号密码登录（获取 Cookie）
+
+```http
+POST /api/accounts/:id/login
+Content-Type: application/json
+
+{
+  "password": "用户的常规iCloud密码",
+  "otp_code": "123456"  // 可选,2FA 验证码
+}
+```
+
+**参数说明:**
+- `:id` (路径参数) — 账号 ID
+- `password` (必填) — iCloud 账号的常规密码(**不是** App Password)
+- `otp_code` (可选) — 双重认证验证码
+
+**响应:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "acc_1",
+    "cookies": {
+      "x-apple-session-token": "...",
+      "X-APPLE-WEBAUTH-TOKEN": "...",
+      "X-APPLE-WEBAUTH-USER": "..."
+    }
+  }
+}
+```
+
+**注意事项:**
+- 密码是登录 appleid.apple.com 的**常规账号密码**,不是 App 专用密码
+- 登录前账号必须已设置 `icloud_email` 字段
+- 登录成功后 Cookie 会自动保存到 accounts.json
+- 启用 2FA 时,第一次请求会被拒绝,需要带 `otp_code` 重试
+
+---
+
+### 6. 删除账号
 
 **Cookie 格式:**
 ```json

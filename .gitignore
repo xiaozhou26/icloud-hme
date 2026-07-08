@@ -22,3 +22,4 @@ reverse_task/
 js
 accounts.json
 *.exe
+build/

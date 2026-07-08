@@ -144,6 +144,31 @@ GET /api/accounts
 
 #### 添加账号
 
+**简化版（cookies 可选）:**
+
+```bash
+POST /api/accounts
+
+# 请求体
+{
+  "name": "新账号",
+  "host": "icloud.com",           # 可选
+  "proxy": "http://..."           # 可选
+}
+
+# 响应 - 状态为 pending,需登录
+{
+  "success": true,
+  "data": {
+    "id": "acc_xxx",
+    "name": "新账号",
+    "status": "pending"
+  }
+}
+```
+
+**完整版（带 Cookie）:**
+
 ```bash
 POST /api/accounts
 
@@ -151,8 +176,8 @@ POST /api/accounts
 {
   "name": "新账号",
   "cookies": "{\"x-apple-session-token\":\"token_value\"}",  # JSON 或 Header 格式
-  "host": "imap.mail.me.com",  # 可选: iCloud 域名
-  "proxy": "http://user:pass@host:port"  # 可选: HTTP/SOCKS5 代理
+  "host": "icloud.com",           # 可选
+  "proxy": "http://..."           # 可选
 }
 
 # 响应
@@ -161,7 +186,31 @@ POST /api/accounts
   "data": {
     "id": "acc_3",
     "name": "新账号",
-    "host": "imap.mail.me.com"
+    "status": "active"
+  }
+}
+```
+
+#### 账号登录（获取 Cookie）
+
+```bash
+POST /api/accounts/:id/login
+
+# 请求体
+{
+  "password": "用户的常规iCloud密码",  # 不是 App Password
+  "otp_code": "123456"                  # 可选,2FA 验证码
+}
+
+# 响应
+{
+  "success": true,
+  "data": {
+    "id": "acc_1",
+    "cookies": {
+      "x-apple-session-token": "...",
+      "X-APPLE-WEBAUTH-TOKEN": "..."
+    }
   }
 }
 ```

@@ -191,7 +191,7 @@ func (s *Server) listAccounts(c *gin.Context) {
 
 type addAccountReq struct {
 	Name     string `json:"name" binding:"required"`
-	Cookies  string `json:"cookies" binding:"required"`
+	Cookies  string `json:"cookies"` // 可选,后续可通过 /login 获取
 	Host     string `json:"host"`
 	Proxy    string `json:"proxy"` // HTTP/SOCKS5 代理
 }
@@ -199,7 +199,7 @@ type addAccountReq struct {
 func (s *Server) addAccount(c *gin.Context) {
 	var req addAccountReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		fail(c, http.StatusBadRequest, "参数错误: name, cookies 必填 — "+err.Error())
+		fail(c, http.StatusBadRequest, "参数错误: name 必填 — "+err.Error())
 		return
 	}
 	acc, err := s.mgr.AddAccount(req.Name, req.Cookies, req.Host, req.Proxy)
