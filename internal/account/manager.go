@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 	"icloud-hme/internal/hme"
-	"icloud-hme/internal/log"
 	"icloud-hme/internal/mail"
 )
 
@@ -182,7 +181,6 @@ func (m *Manager) AddAccount(name, cookieInput, host, proxy string) (*Account, e
 
 	// 有 Cookie 才校验会话
 	if len(cookies) > 0 {
-		log.Logger.Debug().Str("id", acc.ID).Msg("校验 iCloud 会话...")
 		client, err := hme.NewClient(cookies, host, proxy, false)
 		if err != nil {
 			return nil, err
@@ -190,7 +188,6 @@ func (m *Manager) AddAccount(name, cookieInput, host, proxy string) (*Account, e
 		if err := client.ValidateSession(); err != nil {
 			acc.Status = "error"
 			acc.LastError = truncate(err.Error(), 300)
-			log.Logger.Warn().Err(err).Str("id", acc.ID).Msg("会话校验失败")
 		} else {
 			acc.Status = "active"
 			if info := client.AccountInfo(); info != nil {
@@ -206,7 +203,6 @@ func (m *Manager) AddAccount(name, cookieInput, host, proxy string) (*Account, e
 				}
 			}
 			acc.LastValidated = time.Now().Format(time.RFC3339)
-			log.Logger.Info().Str("id", acc.ID).Str("email", acc.RealEmail).Int("aliases", acc.AliasTotal).Msg("会话校验成功")
 		}
 	}
 
@@ -372,17 +368,13 @@ func (m *Manager) SetAppPassword(id, icloudEmail, appPassword string) error {
 	// 测试连接
 	mc := mail.NewClient(icloudEmail, appPassword)
 	if err := mc.Connect(); err != nil {
-		log.Logger.Error().Err(err).Str("id", id).Msg("IMAP 连接测试失败")
 		return err
 	}
 	count, err := mc.InboxCount()
 	mc.Disconnect()
 	if err != nil {
-		log.Logger.Error().Err(err).Str("id", id).Msg("IMAP 收件箱数量获取失败")
 		return err
 	}
-
-	log.Logger.Info().Str("id", id).Str("email", icloudEmail).Int("inbox_count", count).Msg("IMAP 连接测试成功")
 
 	m.mu.Lock()
 	acc.ICloudEmail = icloudEmail
@@ -437,7 +429,6 @@ func (m *Manager) UpdateCookies(id string, cookies map[string]string) error {
 		return err
 	}
 	if err := client.ValidateSession(); err != nil {
-		log.Logger.Warn().Err(err).Str("id", id).Msg("Cookie 校验失败,仍已保存")
 		acc.Status = "error"
 		acc.LastError = "Cookie 校验失败: " + err.Error()
 	} else {

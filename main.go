@@ -16,45 +16,37 @@ package main
 
 import (
 	"flag"
+	"log"
 	"path/filepath"
 
 	"icloud-hme/internal/account"
-	"icloud-hme/internal/log"
 	"icloud-hme/internal/server"
 )
 
 func main() {
 	addr := flag.String("addr", ":8081", "HTTP 监听地址")
 	dataDir := flag.String("data", "./data", "数据目录 (accounts.json 存放位置)")
-	logLevel := flag.String("log-level", "info", "日志级别: debug, info, warn, error")
-	logFormat := flag.String("log-format", "console", "日志格式: console (彩色), json")
-	debug := flag.Bool("debug", false, "调试模式 (启用详细日志)")
+	debug := flag.Bool("debug", false, "调试模式 (启用 Gin 调试日志)")
 	flag.Parse()
 
-	log.SetFormat(log.LogFormat(*logFormat))
-	log.SetLevel(*logLevel)
-	if *debug {
-		log.SetLevel("debug")
-	}
-
-	log.Logger.Info().Str("addr", *addr).Msg("iCloud Hide My Email 服务启动")
+	log.Printf("iCloud Hide My Email 服务启动 addr=%s", *addr)
 
 	abs, err := filepath.Abs(*dataDir)
 	if err != nil {
-		log.Logger.Fatal().Err(err).Msg("数据目录路径错误")
+		log.Fatalf("数据目录路径错误: %v", err)
 	}
 
 	mgr, err := account.NewManager(abs)
 	if err != nil {
-		log.Logger.Fatal().Err(err).Msg("初始化账号管理器失败")
+		log.Fatalf("初始化账号管理器失败: %v", err)
 	}
 	count := len(mgr.ListAccounts())
-	log.Logger.Info().Int("count", count).Str("data_dir", abs).Msg("账号加载完成")
+	log.Printf("账号加载完成 count=%d data_dir=%s", count, abs)
 
 	srv := server.New(mgr, *debug)
 
-	log.Logger.Info().Str("addr", *addr).Msg("HTTP 服务就绪")
+	log.Printf("HTTP 服务就绪 addr=%s", *addr)
 	if err := srv.Run(*addr); err != nil {
-		log.Logger.Fatal().Err(err).Msg("服务启动失败")
+		log.Fatalf("服务启动失败: %v", err)
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"icloud-hme/internal/account"
 	"icloud-hme/internal/hme"
-	"icloud-hme/internal/log"
 	"icloud-hme/internal/mail"
 )
 
@@ -31,9 +30,7 @@ func New(mgr *account.Manager, debug bool) *Server {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	s := &Server{mgr: mgr}
-	s.r = gin.New()
-	s.r.Use(log.GinRecovery())
-	s.r.Use(log.GinLogger())
+	s.r = gin.Default() // 自带 Logger + Recovery 中间件
 	s.register()
 	return s
 }
@@ -109,11 +106,8 @@ func (s *Server) createAlias(c *gin.Context) {
 		return
 	}
 
-	log.Logger.Info().Str("account_id", req.AccountID).Str("label", req.Label).Msg("创建别名")
-
 	client, err := s.mgr.HMEClient(req.AccountID, false)
 	if err != nil {
-		log.Logger.Warn().Err(err).Str("account_id", req.AccountID).Msg("创建别名失败:获取客户端")
 		fail(c, http.StatusNotFound, err.Error())
 		return
 	}
@@ -121,14 +115,11 @@ func (s *Server) createAlias(c *gin.Context) {
 	result, err := client.CreateAlias(req.Label, 5)
 
 	// 操作完成后,保存可能已刷新的 Cookie（validate 会轮换 token）
-	if saveErr := s.mgr.SaveCookies(req.AccountID, client.Cookies); saveErr != nil {
-		log.Logger.Warn().Err(saveErr).Str("account_id", req.AccountID).Msg("保存刷新 Cookie 失败")
-	}
+	_ = s.mgr.SaveCookies(req.AccountID, client.Cookies)
 
 	if err != nil {
 		// 区分会话失效(需重新登录)与临时失败
 		msg := err.Error()
-		log.Logger.Error().Err(err).Str("account_id", req.AccountID).Msg("创建别名失败")
 		if isSessionError(msg) {
 			fail(c, http.StatusUnauthorized, "iCloud 会话失效,请更新 Cookie: "+msg)
 		} else {
@@ -137,7 +128,6 @@ func (s *Server) createAlias(c *gin.Context) {
 		return
 	}
 
-	log.Logger.Info().Str("email", result.Email).Str("label", req.Label).Msg("别名创建成功")
 	ok(c, gin.H{
 		"email":      result.Email,
 		"label":      result.Label,
@@ -168,8 +158,6 @@ func (s *Server) listInbox(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	days, _ := strconv.Atoi(c.DefaultQuery("days", "7"))
 
-	log.Logger.Info().Str("account_id", accountID).Str("alias", alias).Int("limit", limit).Int("days", days).Msg("读取邮件")
-
 	// 优先使用 IMAP (App Password 认证)
 	mc, err := s.mgr.MailClient(accountID)
 	if err == nil {
@@ -182,7 +170,6 @@ func (s *Server) listInbox(c *gin.Context) {
 				messages, err = mc.ListInbox(limit, days)
 			}
 			if err == nil {
-				log.Logger.Info().Str("account_id", accountID).Int("count", len(messages)).Msg("IMAP 邮件读取成功")
 				ok(c, gin.H{
 					"account_id": accountID,
 					"alias":      alias,
@@ -193,12 +180,7 @@ func (s *Server) listInbox(c *gin.Context) {
 				return
 			}
 			// IMAP 失败，继续尝试 Web API
-			log.Logger.Warn().Err(err).Str("account_id", accountID).Msg("IMAP 失败,回退到 Web API")
-		} else {
-			log.Logger.Warn().Err(connErr).Str("account_id", accountID).Msg("IMAP 连接失败,回退到 Web API")
 		}
-	} else {
-		log.Logger.Debug().Err(err).Str("account_id", accountID).Msg("无 App Password,尝试 Web API")
 	}
 
 	// 回退到 Web API (Cookie 认证，无需 App Password)
@@ -214,7 +196,6 @@ func (s *Server) listInbox(c *gin.Context) {
 			fail(c, http.StatusBadGateway, "读取邮件失败: "+err.Error())
 			return
 		}
-		log.Logger.Info().Str("account_id", accountID).Int("count", len(messages)).Msg("Web API 别名过滤邮件成功")
 		ok(c, gin.H{
 			"account_id": accountID,
 			"alias":      alias,
@@ -228,7 +209,6 @@ func (s *Server) listInbox(c *gin.Context) {
 			fail(c, http.StatusBadGateway, "读取邮件失败: "+err.Error())
 			return
 		}
-		log.Logger.Info().Str("account_id", accountID).Int("count", len(messages)).Msg("Web API 邮件读取成功")
 		ok(c, gin.H{
 			"account_id": accountID,
 			"count":      len(messages),
@@ -259,14 +239,11 @@ func (s *Server) addAccount(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "参数错误: name 必填 — "+err.Error())
 		return
 	}
-	log.Logger.Info().Str("name", req.Name).Str("host", req.Host).Msg("添加账号")
 	acc, err := s.mgr.AddAccount(req.Name, req.Cookies, req.Host, req.Proxy)
 	if err != nil {
-		log.Logger.Error().Err(err).Str("name", req.Name).Msg("添加账号失败")
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	log.Logger.Info().Str("id", acc.ID).Str("name", acc.Name).Msg("账号添加成功")
 	// 返回时脱敏
 	acc.Cookies = nil
 	c.JSON(http.StatusCreated, apiResp{Success: true, Data: acc})
@@ -274,9 +251,7 @@ func (s *Server) addAccount(c *gin.Context) {
 
 func (s *Server) removeAccount(c *gin.Context) {
 	id := c.Param("id")
-	log.Logger.Info().Str("id", id).Msg("删除账号")
 	if !s.mgr.RemoveAccount(id) {
-		log.Logger.Warn().Str("id", id).Msg("删除账号失败:不存在")
 		fail(c, http.StatusNotFound, "账号不存在")
 		return
 	}
@@ -295,13 +270,10 @@ func (s *Server) setAppPassword(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "参数错误: icloud_email, app_password 必填 — "+err.Error())
 		return
 	}
-	log.Logger.Info().Str("id", id).Str("icloud_email", req.ICloudEmail).Msg("设置 App Password")
 	if err := s.mgr.SetAppPassword(id, req.ICloudEmail, req.AppPassword); err != nil {
-		log.Logger.Error().Err(err).Str("id", id).Msg("设置 App Password 失败")
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	log.Logger.Info().Str("id", id).Msg("App Password 设置成功")
 	ok(c, gin.H{"id": id, "icloud_email": req.ICloudEmail})
 }
 
@@ -316,13 +288,10 @@ func (s *Server) updateCookies(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "参数错误: cookies 必填 — "+err.Error())
 		return
 	}
-	log.Logger.Info().Str("id", id).Int("count", len(req.Cookies)).Msg("更新 Cookie")
 	if err := s.mgr.UpdateCookies(id, req.Cookies); err != nil {
-		log.Logger.Error().Err(err).Str("id", id).Msg("更新 Cookie 失败")
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	log.Logger.Info().Str("id", id).Msg("Cookie 更新成功")
 	ok(c, gin.H{"id": id, "cookies_count": len(req.Cookies)})
 }
 
@@ -339,8 +308,6 @@ func (s *Server) loginAccount(c *gin.Context) {
 		return
 	}
 
-	log.Logger.Info().Str("id", id).Bool("has_otp", req.OTPCode != "").Msg("账号登录")
-
 	var otpProvider hme.OTPProvider
 	if req.OTPCode != "" {
 		otp := req.OTPCode
@@ -351,7 +318,6 @@ func (s *Server) loginAccount(c *gin.Context) {
 
 	client, err := s.mgr.HMEClientWithPassword(id, req.Password, otpProvider)
 	if err != nil {
-		log.Logger.Error().Err(err).Str("id", id).Msg("登录失败")
 		if isSessionError(err.Error()) {
 			fail(c, http.StatusUnauthorized, err.Error())
 		} else {
@@ -359,8 +325,6 @@ func (s *Server) loginAccount(c *gin.Context) {
 		}
 		return
 	}
-
-	log.Logger.Info().Str("id", id).Msg("登录成功")
 
 	ok(c, gin.H{
 		"id":      id,
@@ -408,8 +372,6 @@ func (s *Server) deactivateAlias(c *gin.Context) {
 		return
 	}
 
-	log.Logger.Info().Str("anonymous_id", anonymousID).Str("account_id", req.AccountID).Msg("停用别名")
-
 	client, err := s.mgr.HMEClient(req.AccountID, false)
 	if err != nil {
 		fail(c, http.StatusNotFound, err.Error())
@@ -419,11 +381,9 @@ func (s *Server) deactivateAlias(c *gin.Context) {
 	success, err := client.DeactivateHME(anonymousID)
 	_ = s.mgr.SaveCookies(req.AccountID, client.Cookies)
 	if err != nil {
-		log.Logger.Error().Err(err).Str("anonymous_id", anonymousID).Msg("停用别名失败")
 		fail(c, http.StatusBadGateway, "停用失败: "+err.Error())
 		return
 	}
-	log.Logger.Info().Str("anonymous_id", anonymousID).Bool("success", success).Msg("别名停用结果")
 	ok(c, gin.H{"anonymous_id": anonymousID, "success": success})
 }
 
@@ -435,8 +395,6 @@ func (s *Server) reactivateAlias(c *gin.Context) {
 		return
 	}
 
-	log.Logger.Info().Str("anonymous_id", anonymousID).Str("account_id", req.AccountID).Msg("激活别名")
-
 	client, err := s.mgr.HMEClient(req.AccountID, false)
 	if err != nil {
 		fail(c, http.StatusNotFound, err.Error())
@@ -446,11 +404,9 @@ func (s *Server) reactivateAlias(c *gin.Context) {
 	success, err := client.ReactivateHME(anonymousID)
 	_ = s.mgr.SaveCookies(req.AccountID, client.Cookies)
 	if err != nil {
-		log.Logger.Error().Err(err).Str("anonymous_id", anonymousID).Msg("激活别名失败")
 		fail(c, http.StatusBadGateway, "激活失败: "+err.Error())
 		return
 	}
-	log.Logger.Info().Str("anonymous_id", anonymousID).Bool("success", success).Msg("别名激活结果")
 	ok(c, gin.H{"anonymous_id": anonymousID, "success": success})
 }
 
@@ -462,8 +418,6 @@ func (s *Server) deleteAlias(c *gin.Context) {
 		return
 	}
 
-	log.Logger.Info().Str("anonymous_id", anonymousID).Str("account_id", req.AccountID).Msg("删除别名")
-
 	client, err := s.mgr.HMEClient(req.AccountID, false)
 	if err != nil {
 		fail(c, http.StatusNotFound, err.Error())
@@ -472,12 +426,10 @@ func (s *Server) deleteAlias(c *gin.Context) {
 
 	if err := client.Delete(anonymousID); err != nil {
 		_ = s.mgr.SaveCookies(req.AccountID, client.Cookies)
-		log.Logger.Error().Err(err).Str("anonymous_id", anonymousID).Msg("删除别名失败")
 		fail(c, http.StatusBadGateway, "删除失败: "+err.Error())
 		return
 	}
 	_ = s.mgr.SaveCookies(req.AccountID, client.Cookies)
-	log.Logger.Info().Str("anonymous_id", anonymousID).Msg("别名删除成功")
 	ok(c, gin.H{"anonymous_id": anonymousID})
 }
 
