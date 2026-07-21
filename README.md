@@ -17,21 +17,57 @@
 
 ### 1. 安装
 
+#### 方式一：下载二进制发布版（推荐）
+
+从 [GitHub Releases](https://github.com/xiaozhou26/icloud-hme/releases) 下载对应平台的二进制文件：
+
+| 平台 | 文件 |
+|---|---|
+| Linux x86_64 | `icloud-hme_linux_amd64` |
+| Linux ARM64 | `icloud-hme_linux_arm64` |
+| macOS Intel | `icloud-hme_darwin_amd64` |
+| macOS Apple Silicon | `icloud-hme_darwin_arm64` |
+| Windows x86_64 | `icloud-hme_windows_amd64.exe` |
+
+```bash
+# 示例：Linux 下直接运行
+chmod +x icloud-hme_linux_amd64
+./icloud-hme_linux_amd64
+```
+
+#### 方式二：Docker
+
+```bash
+# 拉取镜像
+docker pull ghcr.io/xiaozhou26/icloud-hme:latest
+
+# 运行（将本机 data 目录挂载进去）
+docker run -d \
+  --name icloud-hme \
+  -p 8081:8081 \
+  -v /path/to/data:/app/data \
+  ghcr.io/xiaozhou26/icloud-hme:latest
+```
+
+镜像支持 `linux/amd64` 和 `linux/arm64` 双架构，自动适配。
+
+#### 方式三：源码编译
+
 ```bash
 # 前置要求: Go 1.26+
-go version  # 确认 Go 版本
-
-# 克隆项目
-git clone <your-repo-url>
+git clone https://github.com/xiaozhou26/icloud-hme.git
 cd icloud-hme
 
 # 编译
 go build -o icloud-hme.exe .
+
+# 调试模式（启用 Gin 请求日志）
+./icloud-hme.exe -debug
 ```
 
 ### 2. 配置账号
 
-在项目根目录创建 `accounts.json`:
+在程序 `data/` 目录下创建 `accounts.json`:
 
 ```json
 {
@@ -39,33 +75,39 @@ go build -o icloud-hme.exe .
     {
       "id": "acc_1",
       "name": "主号",
-      "cookies": [
-        {
-          "domain": ".icloud.com",
-          "name": "x-apple-session-token",
-          "value": "YOUR_SESSION_TOKEN_HERE"
-        }
-      ],
-      "app_passwords": [
-        {
-          "icloud_email": "your_email@icloud.com",
-          "password": "YOUR_APP_PASSWORD_HERE"
-        }
-      ]
+      "host": "icloud.com",
+      "cookies": {
+        "X-APPLE-WEBAUTH-TOKEN": "token_value",
+        "X-APPLE-WEBAUTH-USER": "v=1:s=1:d=22789132008",
+        "X-APPLE-WEBAUTH-HSA-TRUST": "trust_value",
+        "X-APPLE-DS-WEB-SESSION-TOKEN": "session_token"
+      },
+      "app_password": "xxxx-xxxx-xxxx-xxxx",
+      "proxy": "http://user:pass@host:port"
     }
   ]
 }
 ```
 
+> **提示:** 也可以通过 API 动态添加账号，无需手动编辑 JSON 文件。`cookies` 和 `app_password` 都是可选的，`proxy` 也是可选的。
+
 ### 3. 启动服务
 
 ```bash
-./icloud-hme.exe
+# 二进制方式（默认 data 目录）
+./icloud-hme_linux_amd64
 
-# 服务默认监听 :8080
-# 可通过环境变量 PORT 修改端口
-PORT=9090 ./icloud-hme.exe
+# 指定端口和数据目录
+./icloud-hme_linux_amd64 -addr :9090 -data ./my_data
+
+# 调试模式（启用请求日志）
+./icloud-hme_linux_amd64 -debug
+
+# 查看完整参数
+./icloud-hme_linux_amd64 -h
 ```
+
+服务默认监听 `:8081`。
 
 ## API 接口
 
@@ -443,15 +485,26 @@ icloud-hme/
 # 安装依赖
 go mod download
 
-# 运行 (开发模式，带日志)
-go run main.go
+# 运行 (开发模式，默认 :8081，带 Gin 请求日志)
+go run main.go -debug
 
 # 编译
 go build -o icloud-hme.exe .
 
-# 交叉编译 (Linux)
+# 交叉编译
 GOOS=linux GOARCH=amd64 go build -o icloud-hme .
+GOOS=windows GOARCH=amd64 go build -o icloud-hme.exe .
 ```
+
+### 发布
+
+推送 `v*` tag 到 GitHub 自动触发 CI：
+
+```bash
+git tag v0.2.0 && git push origin --tags
+```
+
+Actions 会自动构建多平台二进制、Docker 镜像（`ghcr.io/xiaozhou26/icloud-hme`）并创建 Release。
 
 ### 代码规范
 
@@ -482,18 +535,43 @@ A local management tool for Apple iCloud Hide My Email (HME) aliases, supporting
 
 ### Quick Start
 
+#### Option 1: Binary (GitHub Releases)
+
+Download the latest binary from [GitHub Releases](https://github.com/xiaozhou26/icloud-hme/releases):
+
+| Platform | File |
+|---|---|
+| Linux x86_64 | `icloud-hme_linux_amd64` |
+| Linux ARM64 | `icloud-hme_linux_arm64` |
+| macOS Intel | `icloud-hme_darwin_amd64` |
+| macOS Apple Silicon | `icloud-hme_darwin_arm64` |
+| Windows x86_64 | `icloud-hme_windows_amd64.exe` |
+
 ```bash
-# Build
-go build -o icloud-hme.exe .
-
-# Create accounts.json with your credentials
-# Run
-./icloud-hme.exe
-
-# API endpoints
-# POST /api/create     - Create HME alias
-# GET  /api/inbox      - Read emails
-# GET  /api/aliases    - List aliases
+# Linux example
+chmod +x icloud-hme_linux_amd64
+./icloud-hme_linux_amd64
 ```
 
-See [API Documentation](#api-接口) for detailed usage.
+#### Option 2: Docker
+
+```bash
+docker pull ghcr.io/xiaozhou26/icloud-hme:latest
+
+docker run -d \
+  --name icloud-hme \
+  -p 8081:8081 \
+  -v /path/to/data:/app/data \
+  ghcr.io/xiaozhou26/icloud-hme:latest
+```
+
+#### Option 3: Build from source
+
+```bash
+git clone https://github.com/xiaozhou26/icloud-hme.git
+cd icloud-hme
+go build -o icloud-hme .
+./icloud-hme -debug     # enable request logging
+```
+
+Create `data/accounts.json` and start the server (default port `:8081`).
