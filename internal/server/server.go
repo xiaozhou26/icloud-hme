@@ -31,6 +31,7 @@ func New(mgr *account.Manager, debug bool) *Server {
 	}
 	s := &Server{mgr: mgr}
 	s.r = gin.Default() // 自带 Logger + Recovery 中间件
+	s.registerUI()
 	s.register()
 	return s
 }
@@ -51,6 +52,7 @@ func (s *Server) register() {
 		api.POST("/accounts", s.addAccount)
 		api.DELETE("/accounts/:id", s.removeAccount)
 		api.POST("/accounts/:id/password", s.setAppPassword)
+		api.PUT("/accounts/:id/mailbox", s.setMailbox)
 		api.PUT("/accounts/:id/cookies", s.updateCookies)
 		api.POST("/accounts/:id/login", s.loginAccount)
 
@@ -59,6 +61,8 @@ func (s *Server) register() {
 
 		// ===== 核心接口 2: 读取邮件 =====
 		api.GET("/inbox", s.listInbox)
+		api.GET("/inbox/:message_id", s.getMessage)
+		api.DELETE("/inbox/:message_id", s.deleteMessage)
 
 		// ===== 别名管理 =====
 		api.GET("/aliases", s.listAliases)
@@ -218,6 +222,55 @@ func (s *Server) listInbox(c *gin.Context) {
 	}
 }
 
+func (s *Server) getMessage(c *gin.Context) {
+	accountID := c.Query("account_id")
+	uid, err := strconv.ParseUint(c.Param("message_id"), 10, 32)
+	if accountID == "" || err != nil {
+		fail(c, http.StatusBadRequest, "account_id 或邮件 ID 无效")
+		return
+	}
+	mc, err := s.mgr.MailClient(accountID)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err = mc.Connect(); err != nil {
+		fail(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	defer mc.Disconnect()
+	message, err := mc.GetFull(uint32(uid))
+	if err != nil {
+		fail(c, http.StatusBadGateway, "读取邮件详情失败: "+err.Error())
+		return
+	}
+	ok(c, message)
+}
+
+func (s *Server) deleteMessage(c *gin.Context) {
+	accountID := c.Query("account_id")
+	uid, err := strconv.ParseUint(c.Param("message_id"), 10, 32)
+	if accountID == "" || err != nil {
+		fail(c, http.StatusBadRequest, "account_id 或邮件 ID 无效")
+		return
+	}
+	mc, err := s.mgr.MailClient(accountID)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err = mc.Connect(); err != nil {
+		fail(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	defer mc.Disconnect()
+	if err = mc.Delete(uint32(uid)); err != nil {
+		fail(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	ok(c, gin.H{"id": c.Param("message_id")})
+}
+
 // ====================================================================
 // 辅助接口
 // ====================================================================
@@ -227,10 +280,10 @@ func (s *Server) listAccounts(c *gin.Context) {
 }
 
 type addAccountReq struct {
-	Name     string `json:"name" binding:"required"`
-	Cookies  string `json:"cookies"` // 可选,后续可通过 /login 获取
-	Host     string `json:"host"`
-	Proxy    string `json:"proxy"` // HTTP/SOCKS5 代理
+	Name    string `json:"name" binding:"required"`
+	Cookies string `json:"cookies"` // 可选,后续可通过 /login 获取
+	Host    string `json:"host"`
+	Proxy   string `json:"proxy"` // HTTP/SOCKS5 代理
 }
 
 func (s *Server) addAccount(c *gin.Context) {
@@ -275,6 +328,35 @@ func (s *Server) setAppPassword(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"id": id, "icloud_email": req.ICloudEmail})
+}
+
+type mailboxReq struct {
+	Provider          string `json:"provider"`
+	Email             string `json:"email" binding:"required"`
+	IMAPHost          string `json:"imap_host" binding:"required"`
+	IMAPPort          int    `json:"imap_port" binding:"required"`
+	AuthorizationCode string `json:"authorization_code" binding:"required"`
+}
+
+func (s *Server) setMailbox(c *gin.Context) {
+	id := c.Param("id")
+	var req mailboxReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "参数错误: 邮箱、IMAP 服务器、端口和授权码必填 — "+err.Error())
+		return
+	}
+	config := account.MailboxConfig{
+		Provider: req.Provider,
+		Email:    req.Email,
+		IMAPHost: req.IMAPHost,
+		IMAPPort: req.IMAPPort,
+		Password: req.AuthorizationCode,
+	}
+	if err := s.mgr.SetMailbox(id, config); err != nil {
+		fail(c, http.StatusBadRequest, "收件邮箱接入失败: "+err.Error())
+		return
+	}
+	ok(c, gin.H{"id": id, "email": req.Email, "imap_host": req.IMAPHost, "imap_port": req.IMAPPort})
 }
 
 type updateCookiesReq struct {

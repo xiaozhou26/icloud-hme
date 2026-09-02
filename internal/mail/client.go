@@ -11,6 +11,7 @@ import (
 	"mime/quotedprintable"
 	"net/mail"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,25 +44,32 @@ type FullMessage struct {
 
 // Client 是 iCloud 邮件 IMAP 客户端。
 type Client struct {
-	appleID     string
-	appPassword string
-	cli         *client.Client
+	username string
+	password string
+	server   string
+	port     int
+	cli      *client.Client
 }
 
 // NewClient 创建 IMAP 客户端。需在调用其它方法前先 Connect。
 func NewClient(appleID, appPassword string) *Client {
-	return &Client{appleID: appleID, appPassword: appPassword}
+	return NewClientWithServer(appleID, appPassword, IMAPServer, IMAPPort)
+}
+
+func NewClientWithServer(username, password, server string, port int) *Client {
+	return &Client{username: username, password: password, server: server, port: port}
 }
 
 // Connect 连接并登录 IMAP 服务器。
 func (c *Client) Connect() error {
-	addr := fmt.Sprintf("%s:%d", IMAPServer, IMAPPort)
+	addr := fmt.Sprintf("%s:%d", c.server, c.port)
 	cli, err := client.DialTLS(addr, nil)
 	if err != nil {
 		return fmt.Errorf("IMAP 连接失败: %w", err)
 	}
-	if err := cli.Login(c.appleID, c.appPassword); err != nil {
-		return fmt.Errorf("IMAP 登录失败 — 请检查: 1) 应用专用密码是否正确 2) Apple ID: %s — %w", c.appleID, err)
+	if err := cli.Login(c.username, c.password); err != nil {
+		_ = cli.Logout()
+		return fmt.Errorf("IMAP 登录失败 — 请检查邮箱账号、授权码和服务器地址: %w", err)
 	}
 	c.cli = cli
 	return nil
@@ -137,7 +145,7 @@ func (c *Client) ListInbox(limit int, days int) ([]Message, error) {
 		m := toMessageWithBody(msg)
 		// days 过滤
 		if days > 0 {
-			if t, err := time.Parse(time.RFC1123Z, m.Date); err == nil {
+			if t, err := time.Parse(time.RFC3339, m.Date); err == nil {
 				if time.Since(t) > time.Duration(days)*24*time.Hour {
 					continue
 				}
@@ -148,6 +156,7 @@ func (c *Client) ListInbox(limit int, days int) ([]Message, error) {
 	if err := <-done; err != nil {
 		return nil, err
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Date > out[j].Date })
 	return out, nil
 }
 
@@ -226,6 +235,7 @@ func (c *Client) fetchByUIDs(uids []uint32, limit int) ([]Message, error) {
 	if err := <-done; err != nil {
 		return nil, err
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Date > out[j].Date })
 	return out, nil
 }
 
@@ -237,17 +247,14 @@ func (c *Client) GetFull(uid uint32) (*FullMessage, error) {
 	if _, err := c.cli.Select("INBOX", true); err != nil {
 		return nil, err
 	}
-
 	seqset := new(imap.SeqSet)
 	seqset.AddNum(uid)
-
-	items := []imap.FetchItem{imap.FetchUid, imap.FetchEnvelope, imap.FetchInternalDate, imap.FetchRFC822}
+	section := &imap.BodySectionName{}
 	messages := make(chan *imap.Message, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- c.cli.UidFetch(seqset, items, messages)
+		done <- c.cli.UidFetch(seqset, []imap.FetchItem{imap.FetchUid, imap.FetchEnvelope, imap.FetchInternalDate, section.FetchItem()}, messages)
 	}()
-
 	msg := <-messages
 	if err := <-done; err != nil {
 		return nil, err
@@ -255,17 +262,29 @@ func (c *Client) GetFull(uid uint32) (*FullMessage, error) {
 	if msg == nil {
 		return nil, fmt.Errorf("邮件不存在 (uid=%d)", uid)
 	}
-
 	full := &FullMessage{Message: toMessage(msg)}
-	// 解析正文
-	if r := msg.GetBody(&imap.BodySectionName{}); r != nil {
-		if em, err := mail.ReadMessage(r); err == nil {
-			body, _ := readBody(em)
-			full.Body = body
-			full.ContentType = em.Header.Get("Content-Type")
+	if reader := msg.GetBody(section); reader != nil {
+		if parsed, err := mail.ReadMessage(reader); err == nil {
+			full.Body, _ = readBody(parsed)
+			full.ContentType = parsed.Header.Get("Content-Type")
 		}
 	}
 	return full, nil
+}
+
+func (c *Client) Delete(uid uint32) error {
+	if c.cli == nil {
+		return fmt.Errorf("未连接")
+	}
+	if _, err := c.cli.Select("INBOX", false); err != nil {
+		return err
+	}
+	seqset := new(imap.SeqSet)
+	seqset.AddNum(uid)
+	if err := c.cli.UidStore(seqset, imap.FormatFlagsOp(imap.AddFlags, true), []interface{}{imap.DeletedFlag}, nil); err != nil {
+		return err
+	}
+	return c.cli.Expunge(nil)
 }
 
 // ---- 解析工具 ----

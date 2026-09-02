@@ -20,28 +20,37 @@ import (
 
 // Account 描述一个 iCloud 账号。
 type Account struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	RealEmail    string            `json:"real_email"`
-	ICloudEmail  string            `json:"icloud_email"`
-	Cookies      map[string]string `json:"cookies"`
-	Host         string            `json:"host"`
-	Proxy        string            `json:"proxy,omitempty"` // HTTP/SOCKS5 代理
-	AppPassword  string            `json:"app_password,omitempty"`
-	Status       string            `json:"status"` // active / error
-	AliasTotal   int               `json:"alias_total"`
-	AliasActive  int               `json:"alias_active"`
-	LastValidated string           `json:"last_validated"`
-	LastError    string            `json:"last_error,omitempty"`
-	CreatedAt    string            `json:"created_at"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	RealEmail     string            `json:"real_email"`
+	ICloudEmail   string            `json:"icloud_email"`
+	Cookies       map[string]string `json:"cookies"`
+	Host          string            `json:"host"`
+	Proxy         string            `json:"proxy,omitempty"` // HTTP/SOCKS5 代理
+	AppPassword   string            `json:"app_password,omitempty"`
+	Mailbox       *MailboxConfig    `json:"mailbox,omitempty"`
+	Status        string            `json:"status"` // active / error
+	AliasTotal    int               `json:"alias_total"`
+	AliasActive   int               `json:"alias_active"`
+	LastValidated string            `json:"last_validated"`
+	LastError     string            `json:"last_error,omitempty"`
+	CreatedAt     string            `json:"created_at"`
+}
+
+type MailboxConfig struct {
+	Provider string `json:"provider"`
+	Email    string `json:"email"`
+	IMAPHost string `json:"imap_host"`
+	IMAPPort int    `json:"imap_port"`
+	Password string `json:"password,omitempty"`
 }
 
 // Manager 管理多个 iCloud 账号,线程安全。
 type Manager struct {
-	mu        sync.Mutex
-	accounts  map[string]*Account
-	dataDir   string
-	dataFile  string
+	mu       sync.Mutex
+	accounts map[string]*Account
+	dataDir  string
+	dataFile string
 }
 
 // NewManager 创建管理器。dataDir 用于存放 accounts.json。
@@ -90,7 +99,7 @@ func (m *Manager) load() error {
 
 func (m *Manager) save() error {
 	wrapper := struct {
-		Accounts map[string]*Account `json:"accounts"`
+		Accounts  map[string]*Account `json:"accounts"`
 		UpdatedAt string              `json:"updated_at"`
 	}{
 		Accounts:  m.accounts,
@@ -248,6 +257,12 @@ func (m *Manager) ListAccounts() []*Account {
 	for _, acc := range m.accounts {
 		cp := *acc
 		cp.Cookies = nil
+		cp.AppPassword = ""
+		if acc.Mailbox != nil {
+			mailbox := *acc.Mailbox
+			mailbox.Password = ""
+			cp.Mailbox = &mailbox
+		}
 		out = append(out, &cp)
 	}
 	return out
@@ -313,6 +328,9 @@ func (m *Manager) MailClient(id string) (*mail.Client, error) {
 	if !ok {
 		return nil, fmt.Errorf("账号不存在: %s", id)
 	}
+	if acc.Mailbox != nil && acc.Mailbox.Email != "" && acc.Mailbox.Password != "" {
+		return mail.NewClientWithServer(acc.Mailbox.Email, acc.Mailbox.Password, acc.Mailbox.IMAPHost, acc.Mailbox.IMAPPort), nil
+	}
 	imapEmail := acc.ICloudEmail
 	if imapEmail == "" {
 		imapEmail = acc.RealEmail
@@ -324,6 +342,38 @@ func (m *Manager) MailClient(id string) (*mail.Client, error) {
 		return nil, fmt.Errorf("账号未设置 App 专用密码")
 	}
 	return mail.NewClient(imapEmail, acc.AppPassword), nil
+}
+
+func (m *Manager) SetMailbox(id string, config MailboxConfig) error {
+	config.Provider = strings.TrimSpace(config.Provider)
+	config.Email = strings.TrimSpace(config.Email)
+	config.IMAPHost = strings.TrimSpace(config.IMAPHost)
+	if config.Email == "" || config.IMAPHost == "" || config.Password == "" {
+		return fmt.Errorf("收件邮箱、IMAP 服务器和授权码不能为空")
+	}
+	if strings.Contains(config.IMAPHost, "://") || config.IMAPPort < 1 || config.IMAPPort > 65535 {
+		return fmt.Errorf("IMAP 服务器或端口无效")
+	}
+	m.mu.Lock()
+	acc, ok := m.accounts[id]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("账号不存在: %s", id)
+	}
+	mc := mail.NewClientWithServer(config.Email, config.Password, config.IMAPHost, config.IMAPPort)
+	if err := mc.Connect(); err != nil {
+		return err
+	}
+	_, err := mc.InboxCount()
+	mc.Disconnect()
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	acc.Mailbox = &config
+	err = m.save()
+	m.mu.Unlock()
+	return err
 }
 
 // WebMailClient 为指定账号创建 Web 邮件客户端。
