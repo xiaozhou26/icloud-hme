@@ -10,7 +10,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/tidwall/gjson v1.19.0
-	golang.org/x/crypto v0.53.0
+	golang.org/x/crypto v0.55.0
 )
 
 require (
